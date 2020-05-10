@@ -1,53 +1,20 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
-
-import tensorflow as tf
-
-# We'll generate plots of attention in order to see which parts of an image
-# our model focuses on during captioning
 import matplotlib.pyplot as plt
-
-# Scikit-learn includes many helpful utilities
 from sklearn.model_selection import train_test_split
 from sklearn.utils import shuffle
-
-import re
-import numpy as np
-import os
-import time
 import json
-from glob import glob
-from PIL import Image
-import pickle
-import os
-import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-from torch.autograd import Variable
-import time
-import sys
-import os
-import os
 import numpy as np
 import matplotlib.image as mp
 from skimage import img_as_ubyte
 from PIL import Image
 import tensorflow as tf
-
-import os
 from Bleu import my_bleu_v2
-
-import pickle as pkl
-import numpy
-import copy
 import os
 import time
 import math
-
-from collections import OrderedDict
-from sklearn.model_selection import KFold
-
-import warnings
+import opencv as cv2
 
 
 annotation_file = './DPC-Captions-master/color_lighting.json'
@@ -300,7 +267,8 @@ def resnet50_cbam(pretrained=False, **kwargs):
     """
     model = ResNet(Bottleneck, [3, 4, 6, 3], **kwargs)
     if pretrained:
-        pretrained_state_dict = model_zoo.load_url(model_urls['resnet50'])
+        res_path = 'https://download.pytorch.org/models/resnet50-19c8e357.pth'
+        pretrained_state_dict =torch.utils.model_zoo.load_url(model_urls[res_path])
         now_state_dict = model.state_dict()
         now_state_dict.update(pretrained_state_dict)
         model.load_state_dict(now_state_dict)
@@ -334,7 +302,7 @@ def calc_max_length(tensor):
 
 #以上步骤是处理文本处理的一般过程
 
-#从词汇表中选择前5000个单词
+#从词汇表中选择前3000个单词
 top_k = 3000
 #text.Tokenizer这个类用来对文本中的词进行统计计数，生成文档词典，以支持基于词典位序生成文本的向量表示
 #分词器Tokenizer语法
@@ -370,8 +338,6 @@ embedding_dim = 256#嵌入式dim = 256
 units = 512
 vocab_size = len(tokenizer.word_index) + 1
 num_steps = len(img_name_train) // BATCH_SIZE
-#从InceptionV3中提取的向量的形状是(64，2048)
-#这两个变量代表了
 features_shape = 2048
 attention_features_shape = 64
 
@@ -667,7 +633,6 @@ def evaluate_vieo(vieo):
 
     hidden = decoder.reset_state(batch_size=1)
 
-    #temp_input = tf.expand_dims(load_image(image)[0], 0)
     img_tensor_val = vieo_unpool
     img_tensor_val = tf.reshape(img_tensor_val, (img_tensor_val.shape[0], -1, img_tensor_val.shape[3]))
 
