@@ -1,0 +1,43 @@
+#平均池化层将视频的特征整合成图片的特征
+import os
+import numpy as np
+import matplotlib.image as mp
+from skimage import img_as_ubyte
+from PIL import Image
+import tensorflow as tf
+
+import cv2
+import os
+from tjn2 import evaluate_vieo
+
+#提取关键帧，每十秒提取一帧
+video_path = r'./vieo/'
+video_photo = r'./vieo_photo/'
+def save_img():
+    videos = os.listdir(video_path)
+    for video_name in videos:
+        videopath = video_path  + video_name
+        print(videopath)
+        vc = cv2.VideoCapture(videopath)  # 读入视频文件
+        c = 1
+        if vc.isOpened():  # 判断是否正常打开
+            rval, frame = vc.read()
+        else:
+            rval = False
+        timeF = 300  # 视频帧计数间隔频率
+        a = 1
+        while rval:  # 循环读取视频帧
+            rval, frame = vc.read()
+            if (c % timeF == 0):  # 每隔timeF帧进行存储操作
+                print(video_path + '//' + str(a) + '.jpg')
+                phnon = load_image(frame)
+                # 不能在D:盘原视频目录上保存图像文件，原因不明
+                cv2.imwrite(video_photo + '//' + str(a) + '.jpg', phnon)
+                # cv2.imshow('Video',frame)
+                a += 1
+            c = c + 1
+        m = cv2.waitKey(1)
+        vc.release()
+    save_img()
+result, attention_plot = evaluate_vieo(video_photo)
+print ('Prediction Caption:', ' '.join(result))
