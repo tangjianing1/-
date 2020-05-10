@@ -1,0 +1,117 @@
+#平均池化层将视频的特征整合成图片的特征
+import os
+import numpy as np
+import matplotlib.image as mp
+from skimage import img_as_ubyte
+from PIL import Image
+import tensorflow as tf
+
+import cv2
+import os
+from tjn3 import evaluate_vieo
+
+#提取关键帧，每十秒提取一帧
+def save_img():
+    video_path = r'./vieo/'
+    video_photo = r'./vieo_photo/'
+    videos = os.listdir(video_path)
+    for video_name in videos:
+        videopath = video_path  + video_name
+        print(videopath)
+        vc = cv2.VideoCapture(videopath)  # 读入视频文件
+        c = 1
+        if vc.isOpened():  # 判断是否正常打开
+            rval, frame = vc.read()
+        else:
+            rval = False
+        timeF = 300  # 视频帧计数间隔频率
+        a = 1
+        while rval:  # 循环读取视频帧
+            rval, frame = vc.read()
+            if (c % timeF == 0):  # 每隔timeF帧进行存储操作
+                print(video_path + '//' + str(a) + '.jpg')
+                phnon = load_image(frame)
+                # 不能在D:盘原视频目录上保存图像文件，原因不明
+                cv2.imwrite(video_photo + '//' + str(a) + '.jpg', phnon)
+                # cv2.imshow('Video',frame)
+                a += 1
+            c = c + 1
+        m = cv2.waitKey(1)
+        vc.release()
+    save_img()
+
+def load_image(img):
+    img = tf.image.decode_jpeg(img, channels=3)
+    img = tf.image.resize(img, (224, 224))
+    img = np.expand_dims(img, axis=0)
+    img = tf.keras.applications.vgg16.preprocess_input(img)
+    return img
+
+
+
+image_model = tf.keras.applications.vgg16.VGG16(include_top=False, weights='imagenet')
+
+new_input = image_model.input
+
+hidden_layer = image_model.layers[-5].output
+
+image_features_extract_model = tf.keras.Model(new_input, hidden_layer)
+
+#Tensorflow通过函数tf.nn.avg_pool实现平均值池化
+def image_pool(image):
+    value3d_avgPool=tf.nn.avg_pool(image,(1,2,2,1),[1,2,2,1],'SAME')
+    session=tf.Session()
+    return(session.run(value3d_avgPool))
+
+
+path = r'./vieo_photo/'   #图像读取地址
+savepath = "./feature_vieo/"  # 图像保存地址
+filelist = os.listdir(path)  # 打开对应的文件夹
+total_num = len(filelist)  #得到文件夹中图像的个数
+feature_vieo = []
+for i in range(total_num):
+    jpg_name = path + str(i + 1) + '.jpg' #拼接图像的读取地址
+    #对图像数据类型进行转换
+    image = mp.imread(jpg_name)
+    image = load_image(image)
+    image = load_image(image)
+    feature_image = image_features_extract_model(image)
+
+    feature_image = tf.reshape(feature_image,
+                                (feature_image.shape[0], -1, feature_image.shape[3]))
+    feature_vieo.append(feature_image)
+    #保存图像
+list = []
+for line in feature_vieo(feature_vieo):
+    image_pool = image_pool(line)
+    image_pool = image_pool.flatten()
+    list.append(image_pool)
+X = np.array(list)
+
+avage_image = []
+pool_len = len(list)
+for i in range(pool_len):
+    len_list = len(i)
+    for j in range(len_list):
+        avage_image[i] += X[j][i]
+    avage_image[i] = avage_image[i]/pool_len
+    i = i+1
+
+#通过网络转发每个图像并将结果向量存储在字典中(image_name –> feature_vector)
+#在所有图像通过网络传递之后，您挑选字典并将其保存到磁盘。
+# 2x2反池化
+def unpool(value, name='unpool'):
+    with tf.name_scope(name) as scope:
+        sh = value.get_shape().as_list()
+        dim = len(sh[1:-1])
+        out = (tf.reshape(value, [-1] + sh[-dim:]))
+        for i in range(dim, 0, -1):
+            out = tf.concat([out, tf.zeros_like(out)], i)
+        out_size = [-1] + [s * 2 for s in sh[1:-1]] + [sh[-1]]
+        out = tf.reshape(out, out_size)
+
+        return out
+
+vieo_unpool = unpool(avage_image)
+result, attention_plot = evaluate_vieo(vieo_unpool)
+print ('Prediction Caption:', ' '.join(result))
