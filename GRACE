@@ -18,6 +18,7 @@ labels_df = pd.DataFrame(labels)
 import os
 import numpy as np
 from keras.preprocessing.image import load_img
+from keras.preprocessing.image import img_to_array
 from sklearn.model_selection import train_test_split
 
 img_width, img_height, channels = 350, 350, 3
@@ -61,7 +62,7 @@ history = model.fit(batch_size=32, x=x_train, y=y_train, epochs=30)
 
 from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau
 from keras.models import load_model
-
+#设置了 checkpoint callback，将验证集的 loss 设为监控项，保存该值最低的模型
 filepath = "{epoch:02d}-{val_loss:.2f}.h5"
 checkpoint = ModelCheckpoint(filepath, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
 reduce_learning_rate = ReduceLROnPlateau(monitor='loss',
@@ -81,8 +82,9 @@ history = model.fit(x=x_train,
                     validation_data=(x_val, y_val),
                     callbacks=callback_list)
 
-best_model = load_model('06-0.15.h5')
+best_model = load_model('06-0.30.h5')#存储loss最好的模型
 
+#在测试集上进行测试
 best_model.evaluate(x =  x_text,y = y_text)
 plt.scatter(y_text, best_model.predict(x_text))
 plt.plot(y_text, y_text,'ro')
@@ -90,6 +92,11 @@ plt.plot(y_text, y_text,'ro')
 #设置了 checkpoint callback，将验证集的 loss 设为监控项，保存该值最低的模型，因为其实几轮之后 `val_loss` 开始逐渐变大，可能是过拟合了；另外可以根据显卡内存的大小，调整下 batch_size 参数，
 
 #有了模型，我们就可以用来预测新的照片和视频了：
+import matplotlib.image as mp
+from scipy import misc
+import scipy.misc
+import  numpy as np
+
 path = r'./vieo_photo/'   #图像读取地址
 filelist = os.listdir(path)  # 打开对应的文件夹
 total_num = len(filelist)
@@ -98,8 +105,8 @@ for i in range(total_num):
     jpg_name = path + str(i + 1) + '.jpg' #拼接图像的读取地址
     #对图像数据类型进行转换
     image = mp.imread(jpg_name)
-    img = imresize(img,size = (img_higher,img_width))
-    text_x = img_to_array(img).reshape(ima_higher,img_width,channels)
+    img = misc.imresize(img,size = (img_height,img_width))
+    text_x = img_to_array(img).reshape(img_height,img_width,channels)
     text_x = text_x / 255
     text_x = text_x.reshape((1,) + text_x.shape)
     predicted = model.predict(text_x)
