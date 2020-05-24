@@ -1,119 +1,262 @@
-# -*- coding:utf-8 -*-
-"""BLEU 就是用来衡量机器翻译文本与参考文本之间的相似程度的指标,取值范围在0-1, 取值越靠近1表示机器翻译结果越好.
-然而这个指标也是经过多次的更新升级.
-Description:
-    1) 使用nltk包中的bleu计算工具来进行辅助计算
-"""
-import numpy as np
-import re
-from nltk.translate.bleu_score import corpus_bleu
+#!/usr/bin/env python
 
-def calculate_average(precisions, weights):
-    """Calculate the geometric weighted mean."""
-    tmp_res = 1
-    for id, item in enumerate(precisions):
-        tmp_res = tmp_res*np.power(item, weights[id])
-    tmp_res = np.power(tmp_res, np.sum(weights))
-    return tmp_res
+# bleu_scorer.py
+# David Chiang <chiang@isi.edu>
 
+# Copyright (c) 2004-2006 University of Maryland. All rights
+# reserved. Do not redistribute without permission from the
+# author. Not for commercial use.
 
-def calculate_candidate(gram_list, candidate):
-    """Calculate the count of gram_list in candidate."""
-    gram_sub_str = ' '.join(gram_list)
-    return len(re.findall(gram_sub_str, candidate))
+# Modified by: 
+# Hao Fang <hfang@uw.edu>
+# Tsung-Yi Lin <tl483@cornell.edu>
 
+'''Provides:
+cook_refs(refs, n=4): Transform a list of reference sentences as strings into a form usable by cook_test().
+cook_test(test, refs, n=4): Transform a test sentence as a string (together with the cooked reference sentences) into a form usable by score_cooked().
+'''
 
-def calculate_reference(gram_list, references):
-    """Calculate the count of gram_list in references"""
-    gram_sub_str = ' '.join(gram_list)
-    gram_count = []
-    for item in references:
-        # calculate the count of the sub string
-        gram_count.append(len(re.findall(gram_sub_str, item)))
-    return gram_count
+import copy
+import sys, math, re
+from collections import defaultdict
 
+def precook(s, n=4, out=False):
+    """Takes a string as input and returns an object that can be given to
+    either cook_refs or cook_test. This is optional: cook_refs and cook_test
+    can take string arguments as well."""
+    words = s.split()
+    counts = defaultdict(int)
+    for k in xrange(1,n+1):
+        for i in xrange(len(words)-k+1):
+            ngram = tuple(words[i:i+k])
+            counts[ngram] += 1
+    return (len(words), counts)
 
-def my_bleu_v2(candidate_sentence, reference_sentences, max_gram, weights,mode=0):
+def cook_refs(refs, eff=None, n=4): ## lhuang: oracle will call with "average"
+    '''Takes a list of reference sentences for a single segment
+    and returns an object that encapsulates everything that BLEU
+    needs to know about them.'''
+
+    reflen = []
+    maxcounts = {}
+    for ref in refs:
+        rl, counts = precook(ref, n)
+        reflen.append(rl)
+        for (ngram,count) in counts.iteritems():
+            maxcounts[ngram] = max(maxcounts.get(ngram,0), count)
+
+    # 计算有效参考句子长度。
+    if eff == "shortest":
+        reflen = min(reflen)
+    elif eff == "average":
+        reflen = float(sum(reflen))/len(reflen)
+
+    ## lhuang: N.B.: leave reflen computaiton to the very end!!
+    
+    ## lhuang: N.B.: in case of "closest", keep a list of reflens!! (bad design)
+
+    return (reflen, maxcounts)
+
+def cook_test(test, reflen, refmaxcounts, eff=None, n=4):
+    ##获取一个测试语句并返回一个封装了BLEU需要了解的一切。
+
+    testlen, counts = precook(test, n, True)
+
+    result = {}
+
+    # Calculate effective reference sentence length.
+    
+    if eff == "closest":
+        result["reflen"] = min((abs(l-testlen), l) for l in reflen)[1]
+    else: ## i.e., "average" or "shortest" or None
+        result["reflen"] = reflen
+
+    result["testlen"] = testlen
+
+    result["guess"] = [max(0,testlen-k+1) for k in xrange(1,n+1)]
+
+    result['correct'] = [0]*n
+    for (ngram, count) in counts.iteritems():
+        result["correct"][len(ngram)-1] += min(refmaxcounts.get(ngram,0), count)
+
+    return result
+
+class BleuScorer(object):
+    """Bleu scorer.
     """
-    :param candidate_sentence:
-    :param reference_sentence:
-    :description: 上诉的最初版本的bleu指标存在比较大的缺陷 如常用词语(the on) 等 由于出现的频率比较高
-    会导致翻译结果比较差的时候也能够得到较高的bleu值
-    改进行的bleu方法中使用到了n-grams precision方式更改分母的计算法则 使得不是简单的计算单个词汇出现次数
-    原有的初始方法是一一个词为基准计算分母 现在改进方法采用n 个词作为一个组用于计算分母 其中n可以从1取到最大
-    这样如果事先决定了所要计算gram的最大长度(N) 那么可以在candidate sentence 和 reference sentences 上计算出每一个
-    长度的gram 的精度 然后对精度进行几何加权平均即可
-    :return:
-    """
-    candidate_corpus = list(candidate_sentence.split(' '))
-    # number of the reference sentences
-    refer_len = len(reference_sentences)
-    candidate_tokens_len = len(candidate_corpus)
-    # 首先需要计算各种长度的gram 的precision值
-    if mode == 0:
-        # method1 to calculate the bleu
-        # 计算当前gram 在candiate_sentence中出现的次数 同时计算这个gram 在所有的reference sentence中的出现的次数
-        # 每一次计算时将当前candidate_sentence中当前gram出现次数与在当前reference sentence中出现的gram次数选择最小值
-        # 作为这个gram相对于 参考文献j的截断次数
-        # 然后将所有的参考文献对应的截断次数做最大值 作为这个gram在整个参考文献上的综合截断值 这个值就是当前gram对应的分子
-        # 分母依然是这个gram 在candidate sentence中出现的次数
-        # 在计算当前长度(n)的其他的gram的综合截断次数 然后加起来作为长度为n的gram的综合截断次数值 分母是所有长度为n的gram的相加的值
-        # 两个值相除即可得到这个长度为n的gram 的precision值
-        # procedure
-        gram_precisions= []
-        for i in range(max_gram):
-            # calculate each gram precision
-            # set current gram length
-            curr_gram_len = i+1
-            # calculate current gram length mole(分子)
-            curr_gram_mole = 0
-            # calculate current gram length deno(分母)
-            curr_gram_deno = 0
-            for j in range(0, candidate_tokens_len, curr_gram_len):
-                if j + curr_gram_len > candidate_tokens_len:
-                    continue
-                else:
-                    curr_gram_list = candidate_corpus[j:j+curr_gram_len]
-                    gram_candidate_count = calculate_candidate(curr_gram_list, candidate_sentence)
-                    # print(' current gram candidate count')
-                    # print(gram_candidate_count)
-                    gram_reference_count_list = calculate_reference(curr_gram_list, reference_sentences)
-                    # print(' current gram reference count list')
-                    # print(gram_reference_count_list)
-                    truncation_list = []
-                    for item in gram_reference_count_list:
-                        truncation_list.append(np.min([gram_candidate_count, item]))
-                    curr_gram_mole += np.max(truncation_list)
-                    curr_gram_deno += gram_candidate_count
-            print(' current length %d and gram mole %d and deno %d' % (i+1, curr_gram_mole, curr_gram_deno))
-            gram_precisions.append(curr_gram_mole/curr_gram_deno)
-        print('all the precisions about the grams')
-        print(gram_precisions)
 
-        # method2 to calculate the bleu
-        # 第二种计算方法与第一种计算方法本质上的区别在于计算截断计数的区别(最终结果是一样的)
-        # 先计算当前n长度的gram在所有的参考文献中的出现次数的最大值 然后在与当前gram在candidate sentence中出现的次数的最小值
-        # 作为综合截断计数 本质上讲两种方法得到的结果是一样的 不在缀述
+    __slots__ = "n", "crefs", "ctest", "_score", "_ratio", "_testlen", "_reflen", "special_reflen"
+    # special_reflen is used in oracle (proportional effective ref len for a node).
 
-    # 其次对多元组合(n-gram)的precision 进行加权取平均作为最终的bleu评估指标
-    # 一般选择的做法是计算几何加权平均 exp(sum(w*logP))
-        average_res = calculate_average(gram_precisions, weights)
-        print(' current average result')
-        print(average_res)
-    # 最后引入短句惩罚项 避免短句翻译结果取得较高的bleu值, 影响到整体评估
-    # 涉及到最佳的匹配长度 当翻译的句子的词数量与任意的参考翻译句子词数量一样的时候 此时无需惩罚项
-    # 如果不相等 那么需要设置一个参考长度r 当翻译的句子长度(c) 大于 r 的时候不需要进行惩罚 而 当c小于r
-    # 需要在加权平均值前乘以一个惩罚项exp(1-r/c) 作为最后的bleu 指标输出
-    # r 的选择可以这样确定 当翻译句子长度等于任何一个参考句子长度时不进行惩罚 但是当都不等于参考句子长度时
-    # 可以选择参考句子中最长的句子作为r 当翻译句子比r 长时不进行惩罚 小于r时进行惩罚
-    bp = 1
-    reference_len_list = [len(item.split(' ')) for item in reference_sentences]
-    if candidate_tokens_len in reference_len_list:
-        bp = 1
-    else:
-        if candidate_tokens_len < np.max(reference_len_list):
-            bp = np.exp(1-(np.max(reference_len_list)/candidate_tokens_len))
-    return bp*average_res
+    def copy(self):
+        ''' copy the refs.'''
+        new = BleuScorer(n=self.n)
+        new.ctest = copy.copy(self.ctest)
+        new.crefs = copy.copy(self.crefs)
+        new._score = None
+        return new
 
+    def __init__(self, test=None, refs=None, n=4, special_reflen=None):
+        ''' singular instance '''
 
-    bleu_v2_score = my_bleu_v2(predict_sentence, train_sentences, 4, weights=[0.25, 0.25, 0.25, 0.25], mode=0)
+        self.n = n
+        self.crefs = []
+        self.ctest = []
+        self.cook_append(test, refs)
+        self.special_reflen = special_reflen
+
+    def cook_append(self, test, refs):
+        '''called by constructor and __iadd__ to avoid creating new instances.'''
+        
+        if refs is not None:
+            self.crefs.append(cook_refs(refs))
+            if test is not None:
+                cooked_test = cook_test(test, self.crefs[-1])
+                self.ctest.append(cooked_test) ## N.B.: -1
+            else:
+                self.ctest.append(None) # lens of crefs and ctest have to match
+
+        self._score = None ## need to recompute
+
+    def ratio(self, option=None):
+        self.compute_score(option=option)
+        return self._ratio
+
+    def score_ratio(self, option=None):
+        '''return (bleu, len_ratio) pair'''
+        return (self.fscore(option=option), self.ratio(option=option))
+
+    def score_ratio_str(self, option=None):
+        return "%.4f (%.2f)" % self.score_ratio(option)
+
+    def reflen(self, option=None):
+        self.compute_score(option=option)
+        return self._reflen
+
+    def testlen(self, option=None):
+        self.compute_score(option=option)
+        return self._testlen        
+
+    def retest(self, new_test):
+        if type(new_test) is str:
+            new_test = [new_test]
+        assert len(new_test) == len(self.crefs), new_test
+        self.ctest = []
+        for t, rs in zip(new_test, self.crefs):
+            self.ctest.append(cook_test(t, rs))
+        self._score = None
+
+        return self
+
+    def rescore(self, new_test):
+        ''' replace test(s) with new test(s), and returns the new score.'''
+        
+        return self.retest(new_test).compute_score()
+
+    def size(self):
+        assert len(self.crefs) == len(self.ctest), "refs/test mismatch! %d<>%d" % (len(self.crefs), len(self.ctest))
+        return len(self.crefs)
+
+    def __iadd__(self, other):
+        '''add an instance (e.g., from another sentence).'''
+
+        if type(other) is tuple:
+            ## avoid creating new BleuScorer instances
+            self.cook_append(other[0], other[1])
+        else:
+            assert self.compatible(other), "incompatible BLEUs."
+            self.ctest.extend(other.ctest)
+            self.crefs.extend(other.crefs)
+            self._score = None ## need to recompute
+
+        return self        
+
+    def compatible(self, other):
+        return isinstance(other, BleuScorer) and self.n == other.n
+
+    def single_reflen(self, option="average"):
+        return self._single_reflen(self.crefs[0][0], option)
+
+    def _single_reflen(self, reflens, option=None, testlen=None):
+        
+        if option == "shortest":
+            reflen = min(reflens)
+        elif option == "average":
+            reflen = float(sum(reflens))/len(reflens)
+        elif option == "closest":
+            reflen = min((abs(l-testlen), l) for l in reflens)[1]
+        else:
+            assert False, "unsupported reflen option %s" % option
+
+        return reflen
+
+    def recompute_score(self, option=None, verbose=0):
+        self._score = None
+        return self.compute_score(option, verbose)
+        
+    def compute_score(self, option=None, verbose=0):
+        n = self.n
+        small = 1e-9
+        tiny = 1e-15 ## so that if guess is 0 still return 0
+        bleu_list = [[] for _ in range(n)]
+
+        if self._score is not None:
+            return self._score
+
+        if option is None:
+            option = "average" if len(self.crefs) == 1 else "closest"
+
+        self._testlen = 0
+        self._reflen = 0
+        totalcomps = {'testlen':0, 'reflen':0, 'guess':[0]*n, 'correct':[0]*n}
+
+        # for each sentence
+        for comps in self.ctest:            
+            testlen = comps['testlen']
+            self._testlen += testlen
+
+            if self.special_reflen is None: ## need computation
+                reflen = self._single_reflen(comps['reflen'], option, testlen)
+            else:
+                reflen = self.special_reflen
+
+            self._reflen += reflen
+                
+            for key in ['guess','correct']:
+                for k in xrange(n):
+                    totalcomps[key][k] += comps[key][k]
+
+            # append per image bleu score
+            bleu = 1.
+            for k in xrange(n):
+                bleu *= (float(comps['correct'][k]) + tiny) \
+                        /(float(comps['guess'][k]) + small) 
+                bleu_list[k].append(bleu ** (1./(k+1)))
+            ratio = (testlen + tiny) / (reflen + small) ## N.B.: avoid zero division
+            if ratio < 1:
+                for k in xrange(n):
+                    bleu_list[k][-1] *= math.exp(1 - 1/ratio)
+
+            if verbose > 1:
+                print(comps, reflen)
+
+        totalcomps['reflen'] = self._reflen
+        totalcomps['testlen'] = self._testlen
+
+        bleus = []
+        bleu = 1.
+        for k in xrange(n):
+            bleu *= float(totalcomps['correct'][k] + tiny) \
+                    / (totalcomps['guess'][k] + small)
+            bleus.append(bleu ** (1./(k+1)))
+        ratio = (self._testlen + tiny) / (self._reflen + small) ## N.B.: avoid zero division
+        if ratio < 1:
+            for k in xrange(n):
+                bleus[k] *= math.exp(1 - 1/ratio)
+
+        if verbose > 0:
+            print(totalcomps)
+            print("ratio:", ratio)
+
+        self._score = bleus
+        return self._score, bleu_list
